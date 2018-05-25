@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace ExchangeRatePredictor.Core
+namespace ExchangeRatePredictor.Foundation
 {
     public class ExchangeRate
     {
