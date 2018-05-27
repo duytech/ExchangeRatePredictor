@@ -1,35 +1,41 @@
-﻿using Newtonsoft.Json;
+﻿using ExchangeRatePredictor.Foundation.Common;
+using ExchangeRatePredictor.Foundation.Models;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace ExchangeRatePredictor.Foundation
 {
-    public class ExchangeRateDataReader
+    public class ExchangeRateDataReader : IExchangeRateDataReader
     {
-        private readonly string path;
-        private readonly string appId;
+        private readonly IConfiguration _configuration;
+        private readonly IOpenExchangeRateClient _client;
+        private readonly ILogger<ExchangeRateDataReader> _logger;
 
-        public ExchangeRateDataReader(string path, string appId)
+        public ExchangeRateDataReader(IConfiguration configuration, IOpenExchangeRateClient client, ILogger<ExchangeRateDataReader> logger)
         {
-            this.path = path;
-            this.appId = appId;
+            _configuration = configuration;
+            _client = client;
+            _logger = logger;
         }
 
-        private string ReadFile(string fileName)
+        private string ReadFile(string fileName, string path)
         {
-            Directory.CreateDirectory(path);
             string readText = string.Empty;
 
             try
             {
-                // Open the file to read from.
-                readText = File.ReadAllText(path + @"\" + fileName);
+                readText = File.ReadAllText($"{path}\\{fileName}");
             }
-            catch(Exception ex)
+            catch(Exception)
             {
                 return string.Empty;
             }
@@ -39,27 +45,47 @@ namespace ExchangeRatePredictor.Foundation
 
         public ExchangeRate Read(DateTime date, string baseCurrency)
         {
-            var fileName = $"{date.ToString("yyyy-MM-dd")}.json";
-            var readText = ReadFile(fileName);
+            string cachePathBaseCurrency = $"{Environment.ExpandEnvironmentVariables(_configuration[Constants.CacheFolder])}\\{baseCurrency}";
+            string fileName = $"{date.ToString("yyyy-MM-dd")}.json";
+            string fileContent = ReadFile(fileName, cachePathBaseCurrency);
 
-            if (string.IsNullOrEmpty(readText))
+            if (string.IsNullOrEmpty(fileContent))
             {
-                var client = new OpenExchangeRateClient();
-                ExchangeRate exchangeRate = client.GetRateByDate(date, appId, baseCurrency);
-                readText = JsonConvert.SerializeObject(exchangeRate);
+                fileContent = _client.GetRateByDate(date, _configuration[Constants.AppId], baseCurrency);
 
-                WriteFile(fileName, readText);
+                WriteFile(fileName, fileContent, cachePathBaseCurrency);
             }
 
-            return JsonConvert.DeserializeObject<ExchangeRate>(readText);
+            return JsonConvert.DeserializeObject<ExchangeRate>(fileContent);
         }
 
-        private void WriteFile(string fileName, string content)
+        private void WriteFile(string fileName, string content, string path)
         {
-            Directory.CreateDirectory(path);
+            try
+            {
+                Directory.CreateDirectory(path);
+                File.WriteAllText($"{path}\\{fileName}", content);
+            }
+            catch(Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not cache the downloaded data.");
+            }
+        }
 
-            // Open the file to read from.
-            File.WriteAllText(path + @"\" + fileName, content);
+        public JObject ReadCurrencies()
+        {
+            string cachePath = Environment.ExpandEnvironmentVariables(_configuration[Constants.CacheFolder]);
+            string fileName = "currencies.json";
+            string fileContent = ReadFile(fileName, cachePath);
+
+            if (string.IsNullOrEmpty(fileContent))
+            {
+                fileContent = _client.GetCurrencies();
+
+                WriteFile(fileName, fileContent, cachePath);
+            }
+
+            return JObject.Parse(fileContent);
         }
     }
 }

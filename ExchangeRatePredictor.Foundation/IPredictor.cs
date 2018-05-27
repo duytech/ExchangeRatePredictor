@@ -5,10 +5,10 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace ExchangeRatePredictor.Foundation.Handlers
+namespace ExchangeRatePredictor.Foundation
 {
-    public interface IPredictCmdHandler
+    public interface IPredictor
     {
-        bool Handle(PredictOption option);
+        decimal Predict(PredictorOption option);
     }
 }

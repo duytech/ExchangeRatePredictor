@@ -1,11 +1,9 @@
-﻿using System;
+﻿using ExchangeRatePredictor.Foundation.Models;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Linq;
-using System.Reflection;
-using System.Threading.Tasks;
 
 namespace ExchangeRatePredictor.Foundation
 {
@@ -13,75 +11,58 @@ namespace ExchangeRatePredictor.Foundation
     /// Calculate the prediction of the exchange rate for 15/1/2017 using 12 sample points, one per month, from
     /// the 15th of the month for the period 15/1/2016 through 15/12/2016
     /// </summary>
-    public class Predictor
+    public class Predictor : IPredictor
     {
-        private readonly string _appId;
-        private readonly string _path;
-        private readonly string fromCurrency;
-        private readonly string toCurrency;
+        private readonly IExchangeRateDataReader _reader;
 
-        public Predictor(string appId, string path, string fromCurrency, string toCurrency)
+        public Predictor(IExchangeRateDataReader reader)
         {
-            _appId = appId;
-            _path = path;
-            this.fromCurrency = fromCurrency;
-            this.toCurrency = toCurrency;
+            _reader = reader;
         }
 
-        /// <summary>
-        /// Ordinal month value
-        /// </summary>
-        /// <returns></returns>
-        private int[] GetX(DateTime fromDate, DateTime toDate)
+        private IDictionary<int, DateTime> CreateDateSet(DateTime fromDate, DateTime toDate)
         {
-            return Enumerable.Range(fromDate.Month, toDate.Month).ToArray();
-        }
-
-        private decimal[] GetY(DateTime fromDateInput, DateTime toDateInput, int[] xValues)
-        {
-            IList<decimal> list = new List<decimal>();
-            var reader = new ExchangeRateDataReader(_path, _appId);
-            foreach(int x in xValues)
+            IDictionary<int, DateTime> dateTimes = new Dictionary<int, DateTime>();
+            for (int month = fromDate.Month; month <= toDate.Month; month++)
             {
-                var date = GetDateForMonth(fromDateInput, toDateInput, x);
-                //var rate = GetExchangeRate(date, appId);
-                var rate = reader.Read(date, fromCurrency);
-                var y = Decimal.Parse(rate.rates[toCurrency].ToString());
-
-                list.Add(y);
+                dateTimes.Add(month, new DateTime(fromDate.Year, month, fromDate.Day));
             }
 
-            return list.ToArray();
+            return dateTimes;
         }
 
-        public IDictionary CreateXYTable(int[] xValues, decimal[] yValues)
+        private decimal[] GetY(DateTime fromDateInput, DateTime toDateInput, int[] xValues, string fromCurrency, string toCurrency)
         {
-            IDictionary dictionary = new Dictionary<int, decimal>();
-            for (int i = 0; i < xValues.Length; i++)
+            IList<decimal> yValues = new List<decimal>();
+            IDictionary<int, DateTime> dates = CreateDateSet(fromDateInput, toDateInput);
+            foreach (int xValue in xValues)
             {
-                dictionary.Add(xValues[i], yValues[i]);
+                ExchangeRate exhangeRate = _reader.Read(dates[xValue], fromCurrency);
+                if (!exhangeRate.rates.ContainsKey(toCurrency))
+                    throw new ArgumentException($"Currency code {toCurrency} is invalid.");
+
+                decimal yValue = Decimal.Parse(exhangeRate.rates[toCurrency].ToString());
+
+                yValues.Add(yValue);
             }
 
-            return dictionary;
+            return yValues.ToArray();
         }
 
-        public decimal Predict(DateTime fromDateInput, DateTime toDateInput, DateTime dateToPredict)
+        public decimal Predict(PredictorOption option)
         {
-            int[] xValues = GetX(fromDateInput, toDateInput);
-            decimal[] yValues = GetY(fromDateInput, toDateInput, xValues);
+            // step 0: create a value table of X(ordinal month value) and Y(rate value for given month)
+            int[] xValues = Enumerable.Range(option.FromDate.Month, option.ToDate.Month).ToArray();
+            decimal[] yValues = GetY(option.FromDate, option.ToDate, xValues, option.FromCurrency, option.ToCurrency);
 
-            // step 0
-            var table = CreateXYTable(xValues, yValues);
+            // step 1: number of values
+            int n = xValues.Length;
 
-            // step 1
-            // number of values
-            int n = table.Count;
-
-            // step 2
+            // step 2: X*X, X*Y
             decimal[] xx = CalXX(xValues);
             decimal[] xy = CalXY(xValues, yValues);
 
-            // step 3
+            // step 3: ΣX, ΣY, Σ(X*X) and Σ(X*Y)
             int sumX = xValues.Sum();
             decimal sumY = yValues.Sum();
             decimal sumXX = xx.Sum();
@@ -95,7 +76,7 @@ namespace ExchangeRatePredictor.Foundation
 
             // step 6
             // 15/1/2017 => x = 13
-            decimal rate = CalRate(intercept, slope, 13);
+            decimal rate = CalRate(intercept, slope, xValues.Length + 1);
 
             return rate;
         }
@@ -103,12 +84,6 @@ namespace ExchangeRatePredictor.Foundation
         /// <summary>
         /// Slope(b) = (NΣXY - (ΣX)(ΣY)) / (NΣX2 - (ΣX)2)
         /// </summary>
-        /// <param name="n"></param>
-        /// <param name="sumX"></param>
-        /// <param name="sumY"></param>
-        /// <param name="sumXX"></param>
-        /// <param name="sumXY"></param>
-        /// <returns></returns>
         private decimal CalSlope(int n, int sumX, decimal sumY, decimal sumXX, decimal sumXY)
         {
             return (n * sumXY - sumX * sumY) / (n * sumXX - (decimal)Math.Pow(sumX, 2));
@@ -117,7 +92,6 @@ namespace ExchangeRatePredictor.Foundation
         /// <summary>
         /// Intercept(a) = (ΣY - b(ΣX)) / N 
         /// </summary>
-        /// <returns></returns>
         private decimal CalIntercept(decimal sumY, decimal b, decimal sumX, int n)
         {
             return (sumY - b * sumX) / n;
@@ -125,19 +99,18 @@ namespace ExchangeRatePredictor.Foundation
 
         private decimal[] CalXX(int[] xValues)
         {
-            IList<decimal> list = new List<decimal>();
-            foreach (var x in xValues)
+            decimal[] xx = new decimal[xValues.Length];
+            for (int i = 0; i < xValues.Length; i++)
             {
-                list.Add(x * x);
+                xx[i] = (xValues[i] * xValues[i]);
             }
 
-            return list.ToArray();
+            return xx;
         }
 
         /// <summary>
         /// Regression Equation(y) = a + bx 
         /// </summary>
-        /// <returns></returns>
         private decimal CalRate(decimal intercept, decimal slope, int x)
         {
             return intercept + slope * x;
@@ -145,42 +118,13 @@ namespace ExchangeRatePredictor.Foundation
 
         private decimal[] CalXY(int[] xValues, decimal[] yValues)
         {
-            IList<decimal> list = new List<decimal>();
-            for (int i=0; i<xValues.Length; i++)
+            decimal[] xy = new decimal[xValues.Length];
+            for (int i = 0; i < xValues.Length; i++)
             {
-                list.Add(xValues[i] * yValues[i]);
+                xy[i] = xValues[i] * yValues[i];
             }
 
-            return list.ToArray();
-        }
-
-        private int SumOfX(int[] xValues)
-        {
-            return xValues.Sum();
-        }
-
-        private decimal SumOfY(decimal[] yValues)
-        {
-            return yValues.Sum();
-        }
-
-        private DateTime GetDateForMonth(DateTime fromDateInput, DateTime toDateInput, int month)
-        {
-            var date = new DateTime();
-            var isParsed = DateTime.TryParseExact($"{fromDateInput.Day}/{month}/{fromDateInput.Year}", new string[] { "dd/M/yyyy", "dd/MM/yyyy" }, CultureInfo.InvariantCulture, DateTimeStyles.None, out date);
-            if (!isParsed)
-                throw new ArgumentException("Date is not valid. Date format is dd/M/yyyy or dd/MM/yyyy");
-
-            return date;
-        }
-
-        private ExchangeRate GetExchangeRate(DateTime exchangeRateDate, string appId)
-        {
-            var client = new OpenExchangeRateClient();
-
-            var exchangeRate = client.GetRateByDate(exchangeRateDate, appId, null);
-
-            return exchangeRate;
+            return xy;
         }
     }
 }

@@ -1,17 +1,24 @@
 ﻿using CommandLine;
 using ExchangeRatePredictor.Foundation.Models;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Reflection;
+using System.Globalization;
 using System.Text;
-using System.Threading.Tasks;
 
 namespace ExchangeRatePredictor.Foundation.Application
 {
     public class CmdApplication : IApplication
     {
+        private readonly IPredictor _predictor;
+        private readonly IExchangeRateDataReader _reader;
+
+        public CmdApplication(IPredictor predictor, IExchangeRateDataReader reader)
+        {
+            _predictor = predictor;
+            _reader = reader;
+        }
+
         public string Process(string[] args)
         {
             ParserResult<PredictOption> parsedResult = Parser.Default.ParseArguments<PredictOption>(args);
@@ -25,15 +32,36 @@ namespace ExchangeRatePredictor.Foundation.Application
 
         private string HandlePredictCommand(PredictOption opts)
         {
-            Predictor predictor = new Predictor("d9019abeb1294959af6be5c240556bfd", Path.GetDirectoryName(Assembly.GetEntryAssembly().Location) + "\\ExchangeData", opts.From, opts.To);
-            decimal rate = predictor.Predict(DateTime.Parse("15/01/2016"), DateTime.Parse("15/12/2016"), DateTime.Parse("15/01/2017"));
+            JObject currencies = _reader.ReadCurrencies();
+            StringBuilder stringBuilder = new StringBuilder();
+            if (!currencies.ContainsKey(opts.From))
+                stringBuilder.AppendLine($"Currency code {opts.From} is invalid.");
 
-            return rate.ToString();
+            if(!currencies.ContainsKey(opts.To))
+                stringBuilder.AppendLine($"Currency code {opts.To} is invalid.");
+
+            if (stringBuilder.Length > 0)
+                throw new ArgumentException(stringBuilder.ToString());
+
+            PredictorOption option = new PredictorOption
+            {
+                FromDate = DateTime.ParseExact("15/01/2016", "dd/MM/yyyy", CultureInfo.InvariantCulture),
+                ToDate = DateTime.ParseExact("15/12/2016", "dd/MM/yyyy", CultureInfo.InvariantCulture),
+                PredictDate = DateTime.ParseExact("15/01/2017", "dd/MM/yyyy", CultureInfo.InvariantCulture),
+                FromCurrency = opts.From,
+                ToCurrency = opts.To
+            };
+
+            decimal rate = _predictor.Predict(option);
+
+            string result = $"The predicted currency exchange from {opts.From} to {opts.To} for 15/1/2017 is {rate}";
+
+            return result;
         }
 
         private string ShowError(IEnumerable<Error> errors)
         {
-            throw new NotImplementedException();
+            return "Somthing went wrong.";
         }
     }
 }
